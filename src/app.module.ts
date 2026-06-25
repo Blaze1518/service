@@ -4,7 +4,7 @@ import { BullModule } from '@nestjs/bullmq';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { RedisModule } from './common/redis/redis.module';
-
+import { BrokersModule } from './modules/worker/brokers/brokers.module';
 import { WorkerModule } from './modules/worker/worker.module';
 @Module({
   imports: [
@@ -23,7 +23,7 @@ import { WorkerModule } from './modules/worker/worker.module';
         },
       }),
     }),
-
+    BrokersModule,
     WorkerModule,
     RedisModule,
   ],

@@ -4,7 +4,7 @@ import { Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { chromium, Browser } from 'playwright';
 import { Job, Queue } from 'bullmq';
 import { AutomationService } from '../../automation/automation.service';
-import { RedisService } from '../../../common/redis/redis.service';
+import { AccountSessionBroker } from '../brokers/account-session-broker.service';
 
 @Processor('portal-checks', { concurrency: 15 })
 export class PortalCheckProcessor
@@ -16,7 +16,8 @@ export class PortalCheckProcessor
 
   constructor(
     private readonly automationService: AutomationService,
-    private readonly redisService: RedisService,
+    private readonly sessionBroker: AccountSessionBroker,
+    @InjectQueue('portal-checks') private readonly portalQueue: Queue,
     @InjectQueue('global-task-results') private readonly resultQueue: Queue,
   ) {
     super();
@@ -45,23 +46,34 @@ export class PortalCheckProcessor
     const payload = job.data;
     const jobId = payload.jobId || job.id;
     const startTime = Date.now();
+    const normalizedSite = payload.targetSiteCode.toUpperCase();
 
     this.logger.log(
       `🤖 [Job ${jobId}] Tiếp nhận cấu hình Bot ID [${payload.taskId}] - Đài [${payload.targetSiteCode}]`,
     );
 
     try {
-      const redisKey = `session:${payload.targetSiteCode}`;
-      const storageState = await this.redisService.get<any>(redisKey);
-
-      if (!storageState) {
+      const lease = await this.sessionBroker.acquireSession(normalizedSite);
+      if (!lease) {
         this.logger.warn(
-          `⚠️ [Job ${jobId}] Huỷ lệnh! Không có Session của đài [${payload.targetSiteCode}] trên Redis.`,
+          `⏳ [Job ${jobId}] [ĐIỀU TỐC CHẶN BÃO] Toàn bộ tài khoản đài [${normalizedSite}] bận hoặc cạn Token. Đẩy Job vào trạng thái CHỜ (Delayed 10s)...`,
         );
-        throw new Error(
-          `MISSING_SESSION: Thiếu tư cách uỷ quyền cho đài ${payload.targetSiteCode}`,
-        );
+
+        await this.portalQueue.add(job.name, payload, {
+          delay: 10000,
+          removeOnComplete: true,
+          removeOnFail: true,
+        });
+
+        return {
+          status: 'DEFERRED',
+          message: 'Rate limit or missing session, waiting',
+        };
       }
+
+      this.logger.log(
+        `🎯 [Job ${jobId}] Thuê thành công tài khoản Admin [${lease.username}] từ xô RAM Redis. Khai hỏa Playwright...`,
+      );
 
       const workflowSteps = payload.compiledWorkflow || [];
       if (workflowSteps.length === 0) {
@@ -71,10 +83,14 @@ export class PortalCheckProcessor
         return { status: 'SKIPPED', message: 'Workflow steps empty' };
       }
 
-      await this.automationService.runWorkflow(workflowSteps, storageState, {
-        sharedBrowser: this.globalBrowser,
-        blockResources: true,
-      });
+      await this.automationService.runWorkflow(
+        workflowSteps,
+        lease.storageState,
+        {
+          sharedBrowser: this.globalBrowser,
+          blockResources: true,
+        },
+      );
 
       const executionTimeMs = Date.now() - startTime;
       this.logger.log(
@@ -95,13 +111,13 @@ export class PortalCheckProcessor
           result: {
             status: 'ALIVE',
             reasonCode: 'SUCCESS',
-            rawLog: 'Toàn bộ kịch bản tự động hóa tuần tự chạy THÀNH CÔNG!',
+            rawLog: `Xoay tua sử dụng mượt mà tài khoản [${lease.username}] lấy hoàn toàn từ cấu trúc RAM Redis!`,
           },
         },
         { removeOnComplete: true, removeOnFail: true },
       );
 
-      return { status: 'ALIVE', jobId: jobId };
+      return { status: 'ALIVE', jobId: jobId, usedUser: lease.username };
     } catch (error) {
       const executionTimeMs = Date.now() - startTime;
       this.logger.error(

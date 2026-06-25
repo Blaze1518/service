@@ -27,14 +27,31 @@ export class AutomationService {
     if (options?.sharedBrowser) {
       browser = options.sharedBrowser;
       isSharedBrowser = true;
+      this.logger.log(
+        '🔌 [Automation] Nhận thông hành: Sử dụng cụm nhân Browser dùng chung tổng.',
+      );
     } else {
-      // Nếu Master gọi, tự tạo trình duyệt mới
+      this.logger.warn(
+        '⚠️ [Automation] Không thấy Browser tổng. Đang kích hoạt chế độ Master tự phát...',
+      );
       browser = await chromium.launch({ headless: false });
     }
 
-    // 2. TẠO CONTEXT VÀ TIÊM SESSION (Sửa lỗi chí mạng)
+    // =========================================================================
+    // 🛡️ BẬC THẦY ĐỒNG BỘ: ÉP ĐỒNG NHẤT USER-AGENT TRÁNH CƠ CHẾ KHÓA COOKIE CHÉO
+    // =========================================================================
+    // Số lượng cookies được nạp vào khay để giám sát
+    const cookieCount = storageState?.cookies?.length || 0;
+    this.logger.log(
+      `📥 [Session] Tiến hành nạp đạn tài nguyên. Số lượng Cookies phát hiện: [${cookieCount}]`,
+    );
+
     const context = await browser.newContext({
       storageState: storageState || undefined,
+      // 🌟 PHÁ BẪY: Ép tất cả các luồng dù ngầm hay hiện hình đều dùng chung dấu chân Chrome Windows sạch
+      userAgent:
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+      viewport: { width: 1440, height: 900 },
     });
 
     // 🌟 SỬA BUG: Phải tạo page TỪ CONTEXT thì mới ăn được Session!
