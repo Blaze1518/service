@@ -52,15 +52,18 @@ export class PortalCheckProcessor
       `🤖 [Job ${jobId}] Tiếp nhận cấu hình Bot ID [${payload.taskId}] - Đài [${payload.targetSiteCode}]`,
     );
 
+    let lease: { username: string; storageState: any } | null = null;
+
     try {
-      const lease = await this.sessionBroker.acquireSession(normalizedSite);
+      lease = await this.sessionBroker.acquireSession(normalizedSite);
+
       if (!lease) {
         this.logger.warn(
           `⏳ [Job ${jobId}] [ĐIỀU TỐC CHẶN BÃO] Toàn bộ tài khoản đài [${normalizedSite}] bận hoặc cạn Token. Đẩy Job vào trạng thái CHỜ (Delayed 10s)...`,
         );
 
         await this.portalQueue.add(job.name, payload, {
-          delay: 10000,
+          delay: 30000,
           removeOnComplete: true,
           removeOnFail: true,
         });
@@ -149,6 +152,10 @@ export class PortalCheckProcessor
       );
 
       return { status: 'DEAD', error: error.message, jobId: jobId };
+    } finally {
+      if (lease) {
+        await this.sessionBroker.releaseSession(normalizedSite, lease.username);
+      }
     }
   }
 

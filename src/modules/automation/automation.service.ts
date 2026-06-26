@@ -51,7 +51,7 @@ export class AutomationService {
       // 🌟 PHÁ BẪY: Ép tất cả các luồng dù ngầm hay hiện hình đều dùng chung dấu chân Chrome Windows sạch
       userAgent:
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-      viewport: { width: 1440, height: 900 },
+      viewport: { width: 1920, height: 1080 },
     });
 
     // 🌟 SỬA BUG: Phải tạo page TỪ CONTEXT thì mới ăn được Session!

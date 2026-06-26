@@ -16,7 +16,7 @@ export class AccountSessionBroker {
     const nowSec = Math.floor(Date.now() / 1000);
 
     const maxTokens = 3;
-    const refillRateSec = 10;
+    const refillRateSec = 30;
 
     const luaScript = `
       local site = ARGV[1]
@@ -30,8 +30,10 @@ export class AccountSessionBroker {
       for _, user in ipairs(users) do
         local session_key = "account:session:" .. site .. ":" .. user
         local token_key = "account:token:" .. site .. ":" .. user
+        local intent_key = "account:lock_intent:" .. site .. ":" .. user
+        local counter_key = "account:active_workers:" .. site .. ":" .. user
         
-        if redis.call("EXISTS", session_key) == 1 then
+        if redis.call("EXISTS", session_key) == 1 and redis.call("EXISTS", intent_key) == 0 then
           
           local bucket = redis.call("HMGET", token_key, "tokens", "last_refill")
           local tokens = tonumber(bucket[1])
@@ -51,10 +53,16 @@ export class AccountSessionBroker {
           
           if tokens > 0 then
             tokens = tokens - 1
+
             redis.call("HMSET", token_key, "tokens", tokens, "last_refill", last_refill)
+
+            redis.call("INCR", counter_key)
+
+            redis.call("EXPIRE", counter_key, 60)
+
             return user
           end
-        else
+        elseif redis.call("EXISTS", session_key) == 0 then
           redis.call("SREM", pool_key, user)
         end
       end
@@ -87,5 +95,57 @@ export class AccountSessionBroker {
       username: allocatedUser,
       storageState: JSON.parse(cookieBlob),
     };
+  }
+
+  async releaseSession(siteCode: string, username: string): Promise<void> {
+    const redis = this.redisService.getClient();
+    const normalizedSite = siteCode.toUpperCase();
+
+    const releaseLua = `
+      local site = ARGV[1]
+      local user = ARGV[2]
+      
+      local counter_key = "account:active_workers:" .. site .. ":" .. user
+      local intent_key = "account:lock_intent:" .. site .. ":" .. user
+      local channel_key = "channel:account:free:" .. site .. ":" .. user
+      
+      -- 1. Giảm trừ bộ đếm bận đi 1 đơn vị
+      local current = redis.call("DECR", counter_key)
+      
+      -- 2. Nếu bộ đếm chạm đáy 0 hoặc âm (đường thông thoáng)
+      if current <= 0 then
+        redis.call("DEL", counter_key) -- Dọn dẹp sạch key bộ đếm trên RAM
+        
+        -- Kiểm tra xem ông hạ tầng nuôi phiên có đang cắm cờ đứng đợi ngoài sân không
+        if redis.call("EXISTS", intent_key) == 1 then
+          -- 🔥 BẮN TÍN HIỆU PHÁT LOA: Đánh thức luồng nuôi phiên ngay lập tức!
+          redis.call("PUBLISH", channel_key, "clear")
+          return 1
+        end
+      end
+      return 0
+    `;
+
+    try {
+      const isPublished = await redis.eval(
+        releaseLua,
+        0,
+        normalizedSite,
+        username,
+      );
+      if (isPublished === 1) {
+        this.logger.log(
+          `🔔 [Broker Release] Acc [${username}] đã sạch bóng quân thù ➔ Đã gõ chuông Pub/Sub gọi luồng nuôi phiên vào hốt bãi.`,
+        );
+      } else {
+        this.logger.log(
+          `📉 [Broker Release] Giải phóng 1 slot bận của Acc [${username}].`,
+        );
+      }
+    } catch (error) {
+      this.logger.error(
+        `❌ [Broker Release] Lỗi giải phóng bộ đếm cho Acc [${username}]: ${error.message}`,
+      );
+    }
   }
 }
